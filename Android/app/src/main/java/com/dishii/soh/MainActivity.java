@@ -15,8 +15,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.FileOutputStream;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import android.Manifest;
+import android.content.ActivityNotFoundException;
 import android.content.pm.PackageManager;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -42,26 +44,40 @@ public class MainActivity extends SDLActivity{
 
     SharedPreferences preferences;
     private static final CountDownLatch setupLatch = new CountDownLatch(1);
+    private final AtomicBoolean isSetupStarted = new AtomicBoolean(false);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         preferences = getSharedPreferences("com.dishii.soh.prefs",Context.MODE_PRIVATE);
 
+        setupControllerOverlay();
+        attachController();
+
         // Check if storage permissions are granted
         if (hasStoragePermission()) {
-            doVersionCheck();
-            checkAndSetupFiles();
+            if (isSetupStarted.compareAndSet(false, true)) {
+                doVersionCheck();
+                checkAndSetupFiles();
+            }
         } else {
             requestStoragePermission();
         }
+    }
 
-        super.onCreate(savedInstanceState);
+    @Override
+    protected void onResume() {
+        super.onResume();
 
-        setupControllerOverlay();
-        attachController();
+        if (hasStoragePermission()) {
+            if (isSetupStarted.compareAndSet(false, true)) {
+                doVersionCheck();
+                checkAndSetupFiles();
+            }
+        }
     }
 
     public static void waitForSetupFromNative() {
@@ -152,12 +168,20 @@ public class MainActivity extends SDLActivity{
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+ → MANAGE_EXTERNAL_STORAGE
             if (!Environment.isExternalStorageManager()) {
-                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-                intent.setData(Uri.parse("package:" + getPackageName()));
-                startActivityForResult(intent, STORAGE_PERMISSION_REQUEST_CODE);
+                try {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivityForResult(intent, STORAGE_PERMISSION_REQUEST_CODE);
+                } catch (ActivityNotFoundException e) {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                    startActivityForResult(intent, STORAGE_PERMISSION_REQUEST_CODE);
+                }
             } else {
                 // Already granted
-                checkAndSetupFiles();
+                if (isSetupStarted.compareAndSet(false, true)) {
+                    doVersionCheck();
+                    checkAndSetupFiles();
+                }
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             // Android 6–10 → request READ/WRITE at runtime
@@ -169,7 +193,10 @@ public class MainActivity extends SDLActivity{
                     STORAGE_PERMISSION_REQUEST_CODE);
         } else {
             // Below Android 6 → permissions granted at install time
-            checkAndSetupFiles();
+            if (isSetupStarted.compareAndSet(false, true)) {
+                doVersionCheck();
+                checkAndSetupFiles();
+            }
         }
     }
 
@@ -326,12 +353,37 @@ public class MainActivity extends SDLActivity{
             // Handle MANAGE_EXTERNAL_STORAGE result
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 if (Environment.isExternalStorageManager()) {
-                    checkAndSetupFiles();
+                    if (isSetupStarted.compareAndSet(false, true)) {
+                        doVersionCheck();
+                        checkAndSetupFiles();
+                    }
                 } else {
                     Toast.makeText(this, "Storage permission is required to access files.", Toast.LENGTH_LONG).show();
                 }
             }
         }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
+            boolean allGranted = grantResults.length > 0;
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+            if (allGranted) {
+                if (isSetupStarted.compareAndSet(false, true)) {
+                    doVersionCheck();
+                    checkAndSetupFiles();
+                }
+            } else {
+                Toast.makeText(this, "Storage permission is required to access files.", Toast.LENGTH_LONG).show();
+            }
+        }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 
     public void openFilePicker() {
