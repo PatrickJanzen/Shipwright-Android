@@ -64,7 +64,7 @@ public class MainActivity extends SDLActivity{
                 checkAndSetupFiles();
             }
         } else {
-            requestStoragePermission();
+            showPermissionDialog();
         }
     }
 
@@ -73,10 +73,15 @@ public class MainActivity extends SDLActivity{
         super.onResume();
 
         if (hasStoragePermission()) {
+            if (permissionDialog != null && permissionDialog.isShowing()) {
+                permissionDialog.dismiss();
+            }
             if (isSetupStarted.compareAndSet(false, true)) {
                 doVersionCheck();
                 checkAndSetupFiles();
             }
+        } else {
+            showPermissionDialog();
         }
     }
 
@@ -163,24 +168,75 @@ public class MainActivity extends SDLActivity{
 
     private static final int STORAGE_PERMISSION_REQUEST_CODE = 2296;
     private static final int FILE_PICKER_REQUEST_CODE = 0;
+    private AlertDialog permissionDialog = null;
 
-    private void requestStoragePermission() {
+    private void showPermissionDialog() {
+        if (hasStoragePermission()) {
+            return;
+        }
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        if (permissionDialog != null && permissionDialog.isShowing()) {
+            return;
+        }
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle("Storage Permission Required")
+                .setMessage("Ship of Harkinian requires 'All files access' to read game ROMs, mods, and saves from the SOH folder.\n\nPlease tap 'Open Settings' and enable 'Allow access to manage all files'.")
+                .setCancelable(false)
+                .setPositiveButton("Open Settings", (dialog, which) -> {
+                    openManageAllFilesSettings();
+                })
+                .setNegativeButton("Exit", (dialog, which) -> {
+                    finish();
+                });
+
+        permissionDialog = builder.create();
+        permissionDialog.show();
+    }
+
+    private void openManageAllFilesSettings() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ → MANAGE_EXTERNAL_STORAGE
-            if (!Environment.isExternalStorageManager()) {
+            boolean launched = false;
+            try {
+                Uri uri = Uri.fromParts("package", getPackageName(), null);
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, uri);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+                launched = true;
+            } catch (Exception ignored) {
+            }
+
+            if (!launched) {
                 try {
                     Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
                     intent.setData(Uri.parse("package:" + getPackageName()));
-                    startActivityForResult(intent, STORAGE_PERMISSION_REQUEST_CODE);
-                } catch (ActivityNotFoundException e) {
-                    Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
-                    startActivityForResult(intent, STORAGE_PERMISSION_REQUEST_CODE);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(intent);
+                    launched = true;
+                } catch (Exception ignored) {
                 }
-            } else {
-                // Already granted
-                if (isSetupStarted.compareAndSet(false, true)) {
-                    doVersionCheck();
-                    checkAndSetupFiles();
+            }
+
+            if (!launched) {
+                try {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(intent);
+                    launched = true;
+                } catch (Exception ignored) {
+                }
+            }
+
+            if (!launched) {
+                try {
+                    Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                    intent.setData(Uri.fromParts("package", getPackageName(), null));
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(intent);
+                } catch (Exception e) {
+                    Toast.makeText(this, "Unable to open settings. Please enable 'All files access' manually in Settings.", Toast.LENGTH_LONG).show();
                 }
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -349,18 +405,6 @@ public class MainActivity extends SDLActivity{
             // Now pass the path of the file in the new folder
             nativeHandleSelectedFile(destinationFile.getPath());
 
-        } else if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
-            // Handle MANAGE_EXTERNAL_STORAGE result
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                if (Environment.isExternalStorageManager()) {
-                    if (isSetupStarted.compareAndSet(false, true)) {
-                        doVersionCheck();
-                        checkAndSetupFiles();
-                    }
-                } else {
-                    Toast.makeText(this, "Storage permission is required to access files.", Toast.LENGTH_LONG).show();
-                }
-            }
         }
     }
 
